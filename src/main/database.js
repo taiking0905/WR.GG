@@ -2,15 +2,13 @@ const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const { seedChampionData, seedPatchData, seedChampionChangesData } = require('./seedData');
 
-function initializeDatabase() {
-    return new Promise((resolve, reject) => {
+async function initializeDatabase() {
+    return new Promise(async (resolve, reject) => {
         const dbPath = './database.sqlite';
-
-        // データベースファイルが存在するか確認
         const dbExists = fs.existsSync(dbPath);
 
-        // データベース接続
-        let db = new sqlite3.Database(dbPath, (err) => {
+// データベース接続
+        let db = new sqlite3.Database(dbPath, async (err) => {
             if (err) {
                 console.error(err.message);
                 reject(err);
@@ -18,7 +16,6 @@ function initializeDatabase() {
             console.log('Connected to the SQLite database.');
         });
 
-        // テーブル作成
         db.serialize(() => {
             db.run(`CREATE TABLE IF NOT EXISTS Champions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,25 +42,22 @@ function initializeDatabase() {
             )`);
         });
 
-        // 初期データの挿入（データベースが存在しない場合のみ）
-        if (!dbExists) {
-            console.log("Database does not exist. Inserting initial data...");
-            Promise.all([
-                seedChampionData(db),
-                seedPatchData(db),
-                seedChampionChangesData(db)
-            ])
-                .then(() => {
-                    console.log("Initial data inserted successfully.");
-                    resolve(db); // データベース接続を返す
-                })
-                .catch((err) => {
-                    console.error("Error during initial data insertion:", err);
-                    reject(err);
-                });
-        } else {
-            console.log("Database already exists. Skipping initial data insertion.");
-            resolve(db); // データベース接続を返す
+// 初期データの挿入（await によって順序制御）
+        try {
+            if (!dbExists) {
+                console.log("Database does not exist. Inserting initial data...");
+                await seedChampionData(db);
+                await seedPatchData(db);
+                await seedChampionChangesData(db);
+                console.log("Initial data inserted successfully.");
+            } else {
+                console.log("Database already exists. Skipping initial data insertion.");
+            }
+
+            resolve(db); // 成功時にデータベースを返す
+        } catch (errors) {
+            console.error("Error during initial data insertion:", errors);
+            reject(errors); // 収集したエラーをまとめて返す
         }
     });
 }

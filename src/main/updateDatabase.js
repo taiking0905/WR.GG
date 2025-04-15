@@ -3,7 +3,7 @@ const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
 
-async function fetchAndUpdateData(db) {
+async function updateDatabase(db) {
     try {
         const url = "https://wildrift.leagueoflegends.com/ja-jp/news/tags/patch-notes/";
 
@@ -49,117 +49,117 @@ async function fetchAndUpdateData(db) {
 async function updateChampionData(db) {
     const url = "https://wildrift.leagueoflegends.com/ja-jp/champions/";
 
-    return new Promise((resolve, reject) => {
-        axios.get(url)
-            .then(async (response) => {
-                const $ = cheerio.load(response.data);
+    try {
+        const response = await axios.get(url);
+        const $ = cheerio.load(response.data);
 
-                // チャンピオン名を抽出
-                const championElements = $('a.sc-985df63-0.cGQgsO.sc-d043b2-0.bZMlAb');
-                const championNames = [];
-                championElements.each((index, element) => {
-                    const name = $(element).find('div.sc-ce9b75fd-0.lmZfRs').text();
-                    if (name) {
-                        championNames.push(name);
-                    }
-                });
+        const championElements = $('a.sc-985df63-0.cGQgsO.sc-d043b2-0.bZMlAb');
+        const championNames = [];
 
-                // データベースに挿入（トランザクションを使用）
-                db.serialize(() => {
-                    db.run("BEGIN TRANSACTION");
+        championElements.each((index, element) => {
+            const name = $(element).find('div.sc-ce9b75fd-0.lmZfRs').text();
+            if (name) {
+                championNames.push(name);
+            }
+        });
 
-                    const insertStmt = db.prepare(`INSERT OR IGNORE INTO Champions (champion_name) VALUES (?)`);
-                    for (const name of championNames) {
-                        insertStmt.run(name, (err) => {
-                            if (err) {
-                                console.error("Database Insert Error:", err);
-                                db.run("ROLLBACK");
-                                return reject(err);
-                            }
-                        });
-                    }
+        await new Promise((resolve, reject) => {
+            db.serialize(() => {
+                db.run("BEGIN TRANSACTION");
 
-                    insertStmt.finalize((err) => {
-                        if (err) {
-                            console.error("Error finalizing statement:", err);
-                            db.run("ROLLBACK");
-                            reject(err);
-                        } else {
-                            db.run("COMMIT");
-                            console.log("Champion names have been inserted into the database.");
-                            resolve();
-                        }
-                    });
-                });
-            })
-            .catch((error) => {
-                console.error("Error fetching the website:", error);
-                reject(error);
-            });
-    });
-}
+                const insertStmt = db.prepare(`INSERT OR IGNORE INTO Champions (champion_name) VALUES (?)`);
 
-async function updatePatchData(db, patchData) {
-    return new Promise((resolve, reject) => {
-        db.serialize(() => {
-            db.run("BEGIN TRANSACTION"); // トランザクションの開始
-
-            const insertStmt = db.prepare(`
-                INSERT OR IGNORE INTO Patches (patch_name, patch_link) VALUES (?, ?)
-            `);
-
-            patchData.forEach(patch => {
-                const patchName = patch.patch_name;
-                const patchLink = patch.patch_link;
-
-                // データベースに挿入
-                insertStmt.run(patchName, patchLink, (err) => {
-                    if (err) {
-                        console.error("Error inserting patch data:", err);
-                        db.run("ROLLBACK"); // エラー時にロールバック
-                        return reject(err);
-                    }
-                });
-            });
-
-            insertStmt.finalize((err) => {
-                if (err) {
-                    console.error("Error finalizing patch statement:", err);
-                    db.run("ROLLBACK"); // エラー時にロールバック
-                    reject(err);
-                } else {
-                    db.run("COMMIT", (err) => {
-                        if (err) {
-                            console.error("Error committing transaction:", err);
-                            reject(err);
-                        } else {
-                            console.log("Patch data updated successfully.");
-
-                            // データベースの内容を取得して JSON に保存
-                            db.all("SELECT * FROM Patches", (err, rows) => {
-                                if (err) {
-                                    console.error("Error fetching data from database:", err);
-                                    return reject(err);
-                                }
-
-                                const filePath = path.join(__dirname, "patch_notes.json");
-                                fs.writeFileSync(filePath, JSON.stringify(rows, null, 4), "utf-8");
-                                console.log(`Database content saved to ${filePath}`);
-
-                                resolve();
+                (async () => {
+                    try {
+                        for (const name of championNames) {
+                            await new Promise((res, rej) => {
+                                insertStmt.run(name, (err) => {
+                                    if (err) rej(err);
+                                    else res();
+                                });
                             });
                         }
-                    });
-                }
+
+                        insertStmt.finalize((err) => {
+                            if (err) throw err;
+
+                            db.run("COMMIT", (err) => {
+                                if (err) throw err;
+                                console.log("Champion names have been inserted into the database.");
+                                resolve();
+                            });
+                        });
+                    } catch (err) {
+                        console.error("Champion insert error:", err);
+                        db.run("ROLLBACK", () => reject(err));
+                    }
+                })();
             });
         });
-    });
+    } catch (error) {
+        console.error("Error fetching or updating champion data:", error);
+        throw error;
+    }
 }
+
+
+async function updatePatchData(db, patchData) {
+    try {
+        await new Promise((resolve, reject) => {
+            db.serialize(() => {
+                db.run("BEGIN TRANSACTION");
+
+                const insertStmt = db.prepare(`
+                    INSERT OR IGNORE INTO Patches (patch_name, patch_link) VALUES (?, ?)
+                `);
+
+                (async () => {
+                    try {
+                        for (const patch of patchData) {
+                            await new Promise((res, rej) => {
+                                insertStmt.run(patch.patch_name, patch.patch_link, (err) => {
+                                    if (err) rej(err);
+                                    else res();
+                                });
+                            });
+                        }
+
+                        insertStmt.finalize((err) => {
+                            if (err) throw err;
+
+                            db.run("COMMIT", async (err) => {
+                                if (err) throw err;
+
+                                // JSONファイルに書き出し
+                                db.all("SELECT * FROM Patches", (err, rows) => {
+                                    if (err) return reject(err);
+
+                                    const filePath = path.join(__dirname, "patch_notes.json");
+                                    fs.writeFileSync(filePath, JSON.stringify(rows, null, 4), "utf-8");
+                                    console.log(`Database content saved to ${filePath}`);
+
+                                    resolve();
+                                });
+                            });
+                        });
+                    } catch (err) {
+                        console.error("Patch data insert error:", err);
+                        db.run("ROLLBACK", () => reject(err));
+                    }
+                })();
+            });
+        });
+    } catch (error) {
+        console.error("Error in updatePatchData:", error);
+        throw error;
+    }
+}
+
 
 async function updatePatchContents(db, patchData) {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            db.run("BEGIN TRANSACTION"); // トランザクションの開始
+            db.run("BEGIN TRANSACTION");
 
             const insertStmt = db.prepare(`
                 INSERT OR IGNORE INTO Champion_Changes 
@@ -167,69 +167,68 @@ async function updatePatchContents(db, patchData) {
                 VALUES (?, ?, ?, ?)
             `);
 
-            const promises = patchData.map(patch => {
+            const processPatch = async (patch) => {
                 const patchName = patch.patch_name;
                 const patchLink = patch.patch_link;
 
-                return axios.get(patchLink).then(response => {
+                try {
+                    const response = await axios.get(patchLink);
                     const $ = cheerio.load(response.data);
 
-                    const changesPromises = [];
+                    const changes = [];
                     $(".character-changes-container").each((i, elem) => {
                         const championName = $(elem).find(".character-name").text().trim();
 
-                        $(elem)
-                            .find(".character-change")
-                            .each((j, change) => {
-                                const abilityTitle = $(change).find(".character-ability-title").text().trim();
-                                const changeDetails = $(change).find(".character-change-body").text().trim();
+                        $(elem).find(".character-change").each((j, change) => {
+                            const abilityTitle = $(change).find(".character-ability-title").text().trim();
+                            const changeDetails = $(change).find(".character-change-body").text().trim();
 
-                                changesPromises.push(
-                                    new Promise((resolve, reject) => {
-                                        insertStmt.run(championName, patchName, abilityTitle, changeDetails, (err) => {
-                                            if (err) {
-                                                console.error("Error inserting patch content data:", err);
-                                                reject(err);
-                                            } else {
-                                                resolve();
-                                            }
-                                        });
-                                    })
-                                );
-                            });
+                            changes.push({ championName, abilityTitle, changeDetails });
+                        });
                     });
 
-                    return Promise.all(changesPromises);
-                });
-            });
-
-            Promise.all(promises)
-                .then(() => {
-                    insertStmt.finalize((err) => {
-                        if (err) {
-                            console.error("Error finalizing patch content statement:", err);
-                            db.run("ROLLBACK");
-                            reject(err);
-                        } else {
-                            db.run("COMMIT", (err) => {
-                                if (err) {
-                                    console.error("Error committing transaction:", err);
-                                    reject(err);
-                                } else {
-                                    console.log("Patch content data updated successfully.");
-                                    resolve();
+                    for (const change of changes) {
+                        await new Promise((res, rej) => {
+                            insertStmt.run(
+                                change.championName,
+                                patchName,
+                                change.abilityTitle,
+                                change.changeDetails,
+                                (err) => {
+                                    if (err) rej(err);
+                                    else res();
                                 }
-                            });
-                        }
+                            );
+                        });
+                    }
+                } catch (err) {
+                    throw err;
+                }
+            };
+
+            (async () => {
+                try {
+                    for (const patch of patchData) {
+                        await processPatch(patch);
+                    }
+
+                    insertStmt.finalize((err) => {
+                        if (err) throw err;
+
+                        db.run("COMMIT", (err) => {
+                            if (err) throw err;
+                            console.log("Patch content data updated successfully.");
+                            resolve();
+                        });
                     });
-                })
-                .catch(err => {
+                } catch (err) {
                     console.error("Error during patch content update:", err);
-                    db.run("ROLLBACK");
-                    reject(err);
-                });
+                    db.run("ROLLBACK", () => reject(err)); 
+                }
+            })();
         });
     });
 }
 
-module.exports = fetchAndUpdateData;
+
+module.exports = updateDatabase;

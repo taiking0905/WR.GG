@@ -4,28 +4,27 @@ const { initializeDatabase } = require("./database");
 const fetchPatchData = require("./fetchPatchData");
 const updateDatabase = require("./updateDatabase");
 let mainWindow;
-let db; // データベース接続を保持
-
+let db;
 
 app.whenReady().then(async () => {
     try {
-        db = await initializeDatabase(); // データベースの初期化
+        db = await initializeDatabase(); // データベースの初期化が完了するまで待機
+        console.log("Database initialized successfully.");
 
-        await updateDatabase(db); // データベースを更新
-
+        await updateDatabase(db); // データベースの更新
+        console.log("Database updated successfully.");
 
         mainWindow = new BrowserWindow({
             width: 800,
             height: 600,
             webPreferences: {
-                preload: path.join(__dirname, "../preload/preload.js"), // preload.js を指定
-                contextIsolation: true, // セキュリティのため true に設定
-                enableRemoteModule: false, // 不要なモジュールを無効化
+                preload: path.join(__dirname, "../preload/preload.js"),
+                contextIsolation: true,
+                enableRemoteModule: false,
             },
         });
 
-        // 絶対パスで index.html をロード
-        mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+        mainWindow.loadURL("http://localhost:3000");
     } catch (error) {
         console.error("Error during app initialization:", error);
     }
@@ -65,7 +64,9 @@ app.on("web-contents-created", (event, contents) => {
         callback({
             responseHeaders: {
                 ...details.responseHeaders,
-                "Content-Security-Policy": ["default-src 'self'; script-src 'self' 'unsafe-inline'"],
+                "Content-Security-Policy": [
+                    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
+                ],
             },
         });
     });

@@ -4,9 +4,9 @@ const fs = require("fs");
 
 function seedChampionData(db) {
     const url = "https://wildrift.leagueoflegends.com/ja-jp/champions/";
+    const errors = []; // エラーを収集する配列
 
     return new Promise((resolve, reject) => {
-        // スクレイピングして JSON ファイルを作成
         axios.get(url)
             .then(response => {
                 const $ = cheerio.load(response.data);
@@ -28,27 +28,36 @@ function seedChampionData(db) {
                         insertStmt.run(name, (err) => {
                             if (err) {
                                 console.error("Database Insert Error:", err);
-                                reject(err);
+                                errors.push(err); // エラーを収集
                             }
                         });
                     });
-                    insertStmt.finalize();
+                    insertStmt.finalize((err) => {
+                        if (err) {
+                            console.error("Finalize Error:", err);
+                            errors.push(err); // エラーを収集
+                        } else {
+                            console.log("Champion names have been inserted.");
+                        }
 
-                    console.log("Champion names have been inserted into the database.");
-                    resolve();
+                        if (errors.length > 0) {
+                            reject(errors); // エラーがあれば reject
+                        } else {
+                            resolve(); // 成功時に resolve
+                        }
+                    });
                 });
             })
             .catch(error => {
                 console.error("Error fetching the website:", error);
-                reject(error);
+                reject(error); // HTTP リクエストのエラーを reject
             });
     });
 }
 
 function seedPatchData(db) {
-
-    // patch_note.json を読み込む
     const patchData = require('./patch_notes.json'); // JSON ファイルを読み込む
+    const errors = []; // エラーを収集する配列
 
     return new Promise((resolve, reject) => {
         db.serialize(() => {
@@ -59,7 +68,7 @@ function seedPatchData(db) {
                 insertStmt.run(patch.patch_name, patch.patch_link, (err) => {
                     if (err) {
                         console.error("Error inserting patch data:", err);
-                        reject(err);
+                        errors.push(err); // エラーを収集
                     }
                 });
             });
@@ -67,10 +76,15 @@ function seedPatchData(db) {
             insertStmt.finalize((err) => {
                 if (err) {
                     console.error("Error finalizing statement:", err);
-                    reject(err);
+                    errors.push(err); // エラーを収集
                 } else {
                     console.log("Patch data inserted successfully from patch_note.json.");
-                    resolve();
+                }
+
+                if (errors.length > 0) {
+                    reject(errors); // エラーがあれば reject
+                } else {
+                    resolve(); // 成功時に resolve
                 }
             });
         });
@@ -78,32 +92,27 @@ function seedPatchData(db) {
 }
 
 async function seedChampionChangesData(db) {
-    // patch_notes.json の読み込み
     const patchData = require('./patch_notes.json'); 
+    const errors = []; // エラーを収集する配列
 
-    return new Promise(async (resolve, reject) => {
-        db.serialize(async () => {
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
             const insertStmt = db.prepare(`
                 INSERT OR IGNORE INTO Champion_Changes 
                 (champion_name, patch_name, ability_title, change_details) 
                 VALUES (?, ?, ?, ?)
             `);
 
-            try {
-                db.run("BEGIN TRANSACTION"); // トランザクションの開始
+            db.run("BEGIN TRANSACTION"); // トランザクションの開始
 
-                for (const patch of patchData) {
-                    const patchName = patch.patch_name; 
-                    const patchLink = patch.patch_link; 
+            patchData.forEach(async (patch) => {
+                const patchName = patch.patch_name; 
+                const patchLink = patch.patch_link; 
 
-                    console.log(`Fetching data for: Patch_Name:${patchName.slice(-4)}`);
-
-
-                    // Webページ取得
+                try {
                     const response = await axios.get(patchLink);
                     const $ = cheerio.load(response.data);
 
-                    // キャラクター変更部分の取得
                     $(".character-changes-container").each((i, elem) => {
                         const championName = $(elem).find(".character-name").text().trim();
                         let changes = [];
@@ -116,7 +125,6 @@ async function seedChampionChangesData(db) {
                                 changes.push({ ability_title: abilityTitle, change_details: changeDetails });
                             });
 
-                        // データベースに挿入
                         changes.forEach(change => {
                             const abilityTitle = change.ability_title;
                             const changeDetails = change.change_details;
@@ -124,30 +132,36 @@ async function seedChampionChangesData(db) {
                             insertStmt.run(championName, patchName, abilityTitle, changeDetails, (err) => {
                                 if (err) {
                                     console.error("Error inserting data:", err);
-                                    reject(err);
+                                    errors.push(err); // エラーを収集
                                 }
                             });
                         });
                     });
+                } catch (error) {
+                    console.error(`Error fetching data for patch ${patchName}:`, error);
+                    errors.push(error); // エラーを収集
+                }
+            });
+
+            db.run("COMMIT", (err) => {
+                if (err) {
+                    console.error("Error committing transaction:", err);
+                    errors.push(err); // エラーを収集
+                    db.run("ROLLBACK", () => {
+                        console.error("Transaction rolled back due to commit error.");
+                    });
+                } else {
+                    console.log("Champion changes data inserted successfully.");
                 }
 
-                db.run("COMMIT", (err) => {
-                    if (err) {
-                        console.error("Error committing transaction:", err);
-                        reject(err);
-                    } else {
-                        console.log("Champion changes data inserted successfully.");
-                        resolve();
-                    }
-                });
-
                 insertStmt.finalize();
-            } catch (error) {
-                db.run("ROLLBACK", () => {
-                    console.error("Transaction rolled back due to error:", error);
-                    reject(error);
-                });
-            }
+
+                if (errors.length > 0) {
+                    reject(errors); // エラーがあれば reject
+                } else {
+                    resolve(); // 成功時に resolve
+                }
+            });
         });
     });
 }
